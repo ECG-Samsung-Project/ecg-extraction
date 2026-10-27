@@ -8,7 +8,6 @@ from .config import ServerSyncConfig
 from .local_inventory import LocalInventoryScanner
 from .models import (
     ComparisonReport,
-    RemoteInventory,
     UploadBatchResult,
     UploadProgress,
 )
@@ -78,6 +77,7 @@ class ServerSyncBackend:
             remote_inventory = self.remote_scanner.scan(
                 config=config,
                 client=client,
+                status_callback=set_status,
             )
 
         set_status("Comparando arquivos locais e remotos...")
@@ -92,40 +92,6 @@ class ServerSyncBackend:
         set_status("Comparação concluída.")
 
         return report
-
-    def inspect_remote(
-        self,
-        status_callback: StatusCallback = None,
-        password_prompt: PasswordPrompt = None,
-        connection_profile: str | None = None,
-    ) -> RemoteInventory:
-        def set_status(text: str) -> None:
-            if status_callback:
-                status_callback(text)
-
-        self._active_config = None
-        self._active_report = None
-
-        set_status("Carregando configuração...")
-        config = self._load_config(connection_profile)
-        config.validate_connection_environment()
-        config = self._resolve_runtime_password(
-            config=config,
-            password_prompt=password_prompt,
-        )
-
-        set_status("Conectando ao servidor SSH/SFTP...")
-
-        with self.client_factory(config) as client:
-            set_status("Consultando as pastas raw no servidor...")
-            inventory = self.remote_scanner.scan(
-                config=config,
-                client=client,
-            )
-
-        self._active_config = config
-        set_status("Status atualizado.")
-        return inventory
 
     def upload_selected(
         self,

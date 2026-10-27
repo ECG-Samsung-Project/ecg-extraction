@@ -18,7 +18,7 @@ def create_mobile_frame(parent: tk.Widget) -> tk.Frame:
 
     title_label = tk.Label(
         frame,
-        text="Extrair pasta Documents do celular",
+        text="Verificar e extrair arquivos do celular",
         font=("Arial", 16, "bold"),
     )
     title_label.pack(pady=14)
@@ -90,7 +90,7 @@ def create_mobile_frame(parent: tk.Widget) -> tk.Frame:
 
     extract_button = tk.Button(
         frame,
-        text="Pegar pasta Documents",
+        text="Extrair e compactar",
         font=("Arial", 12),
         width=28,
     )
@@ -111,15 +111,22 @@ def create_mobile_frame(parent: tk.Widget) -> tk.Frame:
     progress_bar.pack(pady=4)
     progress_bar.stop()
 
+    result_frame = tk.Frame(frame)
+    result_frame.pack(pady=8)
+    result_scrollbar = ttk.Scrollbar(result_frame, orient="vertical")
+    result_scrollbar.pack(side="right", fill="y")
+
     result_text = tk.Text(
-        frame,
-        height=10,
+        result_frame,
+        height=14,
         width=72,
         font=("Consolas", 9),
         wrap="word",
         state="disabled",
     )
-    result_text.pack(pady=8)
+    result_text.config(yscrollcommand=result_scrollbar.set)
+    result_scrollbar.config(command=result_text.yview)
+    result_text.pack(side="left")
 
     output_label = tk.Label(
         frame,
@@ -238,16 +245,19 @@ def create_mobile_frame(parent: tk.Widget) -> tk.Frame:
         lines = [
             f"Celular encontrado: {result['device_id']}",
             "",
-            f"Pastas em {result['documents_path']}:",
         ]
 
-        if not result["folders"]:
-            lines.append("Nenhuma pasta encontrada.")
-        else:
-            for folder in result["folders"]:
-                lines.append(
-                    f"{folder['folder_name']} -> {folder['file_count']} FILES"
-                )
+        if not result["sources"]:
+            lines.append("Nenhuma pasta de coleta encontrada.")
+        for source in result["sources"]:
+            lines.append(f"Origem: {source['path']} ({source['file_count']} arquivos)")
+            if not source["folders"] and not source["files"]:
+                lines.append("  Pasta vazia.")
+            for folder in source["folders"]:
+                lines.append(f"  {folder['folder_name']}/ -> {folder['file_count']} arquivos")
+            for filename in source["files"]:
+                lines.append(f"  {filename} (arquivo)")
+            lines.append("")
 
         lines.append("")
 

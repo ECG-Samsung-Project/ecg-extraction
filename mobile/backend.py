@@ -1,5 +1,5 @@
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from core.adb_client import AdbClient
@@ -221,10 +221,24 @@ class MobileBackend:
         set_status(f"Celular encontrado: {device_id}")
 
 
-        set_status("Varrendo pasta Documents...")
-        folder_summaries = self.android_fs.get_folder_summaries(
-            self.config.phone_documents_path
-        )
+        source_summaries = []
+        folder_summaries = []
+        for source in self.android_fs.existing_source_paths(self.config.phone_documents_path):
+            set_status(f"Varrendo {source}...")
+            folders = self.android_fs.get_folder_summaries(source)
+            files = self.android_fs.list_files(source, check=True)
+            loose_files = sorted(
+                PurePosixPath(path).name
+                for path in files
+                if PurePosixPath(path).parent == PurePosixPath(source)
+            )
+            source_summaries.append({
+                "path": source,
+                "folders": folders,
+                "files": loose_files,
+                "file_count": len(files),
+            })
+            folder_summaries.extend(folders)
 
         participant_id = None
         participant_raw_id = None
@@ -253,6 +267,7 @@ class MobileBackend:
             "device_id": device_id,
             "documents_path": self.config.phone_documents_path,
             "folders": folder_summaries,
+            "sources": source_summaries,
 
             "participant_id": participant_id,
             "participant_raw_id": participant_raw_id,

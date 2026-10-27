@@ -82,13 +82,7 @@ class AndroidFileSystem:
 
     def list_files(self, android_path: str, check: bool = True) -> list[str]:
         result = self.adb.run(
-            [
-                "shell",
-                "find",
-                android_path,
-                "-type",
-                "f",
-            ],
+            ["shell", f"find {shlex.quote(android_path)} -type f"],
             check=False,
         )
 
@@ -109,13 +103,7 @@ class AndroidFileSystem:
 
     def list_dirs(self, android_path: str, check: bool = False) -> list[str]:
         result = self.adb.run(
-            [
-                "shell",
-                "find",
-                android_path,
-                "-type",
-                "d",
-            ],
+            ["shell", f"find {shlex.quote(android_path)} -type d"],
             check=False,
         )
 
@@ -136,7 +124,7 @@ class AndroidFileSystem:
 
     def get_path_size_kb(self, android_path: str) -> int | None:
         result = self.adb.run(
-            ["shell", "du", "-sk", android_path],
+            ["shell", f"du -sk {shlex.quote(android_path)}"],
             check=False,
         )
 

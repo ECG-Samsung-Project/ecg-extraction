@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shlex
 import stat
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -94,6 +95,7 @@ class SshSftpClient:
         try:
             client.connect(**connect_arguments)
             sftp = client.open_sftp()
+            sftp.get_channel().settimeout(self.config.connect_timeout_seconds)
         except Exception as error:
             client.close()
             raise RuntimeError(
@@ -126,63 +128,67 @@ class SshSftpClient:
         self,
         root: PurePosixPath,
     ) -> Iterator[tuple[PurePosixPath, int]]:
-        sftp = self._require_sftp()
+        ssh = self._require_ssh()
+        # GNU find streams metadata in one request instead of one SFTP round trip
+        # per directory. NUL separators preserve spaces, tabs and newlines.
+        output_format = r"%y\0%s\0%p\0"
+        command = f"LC_ALL=C find -- {shlex.quote(str(root))} -printf {shlex.quote(output_format)}"
+        stdin, stdout, stderr = ssh.exec_command(
+            command, timeout=self.config.connect_timeout_seconds,
+        )
+        stdin.close()
+        channel = stdout.channel
+        pending = b""
+        fields: list[bytes] = []
+        errors = bytearray()
+        last_activity = time.monotonic()
 
-        root_attributes = sftp.stat(str(root))
+        try:
+            while True:
+                received = False
+                if channel.recv_ready():
+                    chunk = channel.recv(65536)
+                    if chunk:
+                        received = True
+                        pending += chunk
+                        while b"\0" in pending:
+                            field, pending = pending.split(b"\0", 1)
+                            fields.append(field)
+                            if len(fields) != 3:
+                                continue
+                            kind, size, raw_path = fields
+                            fields = []
+                            path = PurePosixPath(raw_path.decode("utf-8"))
+                            if not path.is_relative_to(root) or ".." in path.parts or "\\" in str(path):
+                                raise RuntimeError("O servidor retornou um caminho inválido no inventário.")
+                            if kind == b"l":
+                                raise RuntimeError(f"Links simbólicos não são aceitos no inventário remoto:\n{path}")
+                            if kind == b"f":
+                                yield path, int(size)
+                if channel.recv_stderr_ready():
+                    detail = channel.recv_stderr(65536)
+                    received = received or bool(detail)
+                    if len(errors) < 65536:
+                        errors.extend(detail[:65536 - len(errors)])
+                if received:
+                    last_activity = time.monotonic()
+                elif channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                    break
+                elif time.monotonic() - last_activity >= self.config.connect_timeout_seconds:
+                    raise RuntimeError(f"Servidor sem resposta durante a consulta de {root}. Tente verificar novamente.")
+                else:
+                    time.sleep(0.01)
 
-        if not stat.S_ISDIR(root_attributes.st_mode):
-            raise RuntimeError(
-                f"O caminho remoto não é uma pasta: {root}"
-            )
-
-        pending = [root]
-
-        while pending:
-            current = pending.pop()
-
-            try:
-                attributes = sorted(
-                    sftp.listdir_attr(str(current)),
-                    key=lambda item: item.filename,
-                )
-            except Exception as error:
-                raise RuntimeError(
-                    f"Não foi possível listar a pasta remota:\n{current}\n"
-                    f"{error}"
-                ) from error
-
-            child_directories: list[PurePosixPath] = []
-
-            for item in attributes:
-                name = item.filename
-
-                if (
-                    not name
-                    or name in {".", ".."}
-                    or "/" in name
-                    or "\\" in name
-                ):
-                    raise RuntimeError(
-                        "O servidor retornou um nome de arquivo inválido em "
-                        f"{current}: {name!r}."
-                    )
-
-                child_path = current / name
-
-                if stat.S_ISLNK(item.st_mode):
-                    raise RuntimeError(
-                        "Links simbólicos não são aceitos no inventário "
-                        f"remoto:\n{child_path}"
-                    )
-
-                if stat.S_ISDIR(item.st_mode):
-                    child_directories.append(child_path)
-                    continue
-
-                if stat.S_ISREG(item.st_mode):
-                    yield child_path, int(item.st_size)
-
-            pending.extend(reversed(child_directories))
+            exit_status = channel.recv_exit_status()
+            if exit_status != 0:
+                detail = errors.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"Não foi possível listar a pasta remota {root}: {detail or exit_status}")
+            if pending or fields:
+                raise RuntimeError(f"O servidor retornou um inventário incompleto para {root}.")
+        finally:
+            channel.close()
+            stdout.close()
+            stderr.close()
 
     def directory_exists(
         self,

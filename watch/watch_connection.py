@@ -1,9 +1,45 @@
+import ipaddress
+import json
+import subprocess
+import sys
+
 from core.adb_client import AdbClient
 
 
 class WatchConnectionManager:
     def __init__(self, adb: AdbClient) -> None:
         self.adb = adb
+
+    @staticmethod
+    def get_local_network() -> ipaddress.IPv4Interface | None:
+        if sys.platform != "win32":
+            return None
+
+        # Consult only local physical adapters; do not probe external hosts.
+        command = (
+            "Get-NetIPConfiguration -Detailed | "
+            "Where-Object { $_.NetAdapter.Status -eq 'Up' -and "
+            "$_.IPv4DefaultGateway -and $_.NetAdapter.HardwareInterface } | "
+            "Sort-Object { $_.IPv4Interface.InterfaceMetric } | "
+            "Select-Object -First 1 -ExpandProperty IPv4Address | "
+            "Select-Object -First 1 -Property IPAddress,PrefixLength | "
+            "ConvertTo-Json -Compress"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True, text=True, timeout=15, check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            values = json.loads(result.stdout)
+            network = ipaddress.IPv4Interface(
+                f"{values['IPAddress']}/{values['PrefixLength']}"
+            )
+            if network.ip.is_loopback or network.ip.is_link_local or network.ip.is_unspecified:
+                return None
+            return network
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
+            return None
 
     @staticmethod
     def validate_ip(ip: str) -> str:
@@ -19,7 +55,18 @@ class WatchConnectionManager:
                 "Exemplo errado: 30.0.0.218:34347"
             )
 
-        return ip
+        try:
+            address = ipaddress.IPv4Address(ip)
+        except ipaddress.AddressValueError as error:
+            raise RuntimeError(
+                "Informe o IPv4 completo mostrado no relógio, com os quatro números "
+                "entre 0 e 255. Exemplo: 192.168.15.218."
+            ) from error
+
+        if address.is_unspecified or address.is_loopback or address.is_multicast or int(address) == 0xFFFFFFFF:
+            raise RuntimeError("Informe um IPv4 válido do relógio na rede local.")
+
+        return str(address)
 
     @staticmethod
     def validate_port(port: str, field_name: str) -> str:

@@ -1,6 +1,6 @@
 # ecg-extraction
 
-Aplicação Tkinter independente: Watch, Mobile, Arquivos, Enviar ao servidor e Status raw.
+Aplicação Tkinter independente: Watch, Mobile e Enviar ao Servidor.
 Requer Python 3.11 ou superior, Tkinter e Android Platform Tools (`adb` no PATH)
 para operar os dispositivos.
 
@@ -13,15 +13,15 @@ python main.py
 
 O `.env` de sincronização fica na raiz de ecg-extraction. Nenhum arquivo de
 Reseting_mobiles é necessário. Os caminhos padrão são resolvidos a partir do
-projeto irmão `../datalake`: Watch e Mobile usam `landing/raw`, Arquivos usa
-`landing` e o CSV de participantes fica em
+projeto irmão `../datalake`: Watch e Mobile usam `landing/raw` e o CSV de
+participantes fica em
 `serving/participants_summary/participants_summary.csv`. Os dados são externos
 e não fazem parte deste repositório.
 
 
 ## Envio ao servidor
 
-A aba **Enviar ao servidor** compara e envia arquivos destas pastas em
+A aba **Enviar ao Servidor** compara e envia arquivos destas pastas em
 `landing/raw`:
 
 - `mobile_fl_data`
@@ -90,11 +90,3 @@ Somente arquivos classificados como novos podem ser selecionados. Cada envio
 usa um nome temporário terminado em `.part`, valida o tamanho e tenta validar
 SHA-256 antes da renomeação definitiva. Conflitos não são sobrescritos e nenhum
 arquivo local ou remoto é apagado automaticamente.
-
-### Testes
-
-Na raiz do projeto:
-
-```powershell
-python -m unittest discover -s "tests\server_sync" -v
-```

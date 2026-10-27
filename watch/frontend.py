@@ -1,5 +1,6 @@
 # watch/frontend.py
 
+import queue
 import threading
 import tkinter as tk
 from tkinter import messagebox, simpledialog
@@ -27,8 +28,8 @@ def create_watch_frame(parent: tk.Widget) -> tk.Frame:
     description_label = tk.Label(
         frame,
         text=(
-            "Informe o IP uma vez, depois preencha a porta de "
-            "pareamento e a porta de conexão."
+            "Complete o IP mostrado no relógio e informe as portas de "
+            "pareamento e conexão (elas são diferentes)."
         ),
         font=("Arial", 10),
         wraplength=550,
@@ -178,10 +179,57 @@ def create_watch_frame(parent: tk.Widget) -> tk.Frame:
         padx=5,
         pady=5,
     )
-    watch_ip_entry.insert(
-        0,
-        "30.0.0.218",
+    network_hint = tk.StringVar(value="Detectando a rede local...")
+    tk.Label(
+        ip_frame, textvariable=network_hint, font=("Arial", 9),
+        wraplength=650, justify="left",
+    ).grid(row=1, column=0, columnspan=3, sticky="w", padx=5, pady=5)
+
+    network_results = queue.Queue()
+    suggested_prefix = ""
+
+    def apply_network_result() -> None:
+        nonlocal suggested_prefix
+        try:
+            network = network_results.get_nowait()
+        except queue.Empty:
+            frame.after(100, apply_network_result)
+            return
+
+        refresh_network_button.config(state="normal")
+        if network is None:
+            network_hint.set("Rede não identificada. Informe o IP completo mostrado no relógio.")
+            return
+
+        # Only prefill complete octets shared by the local subnet.
+        octets = min(3, network.network.prefixlen // 8)
+        prefix = ".".join(str(network.ip).split(".")[:octets]) + "." if octets else ""
+        if watch_ip_entry.get().strip() in {"", suggested_prefix}:
+            watch_ip_entry.delete(0, tk.END)
+            watch_ip_entry.insert(0, prefix)
+            watch_ip_entry.icursor(tk.END)
+        suggested_prefix = prefix
+        network_hint.set(
+            f"IP deste computador: {network.ip} | Rede: {network.network}. "
+            "Complete o IP do relógio; o campo continua editável."
+        )
+
+    def refresh_network() -> None:
+        refresh_network_button.config(state="disabled")
+        network_hint.set("Detectando a rede local...")
+
+        def worker() -> None:
+            network_results.put(backend.connection_manager.get_local_network())
+
+        threading.Thread(target=worker, daemon=True).start()
+        frame.after(100, apply_network_result)
+
+    refresh_network_button = tk.Button(
+        ip_frame, text="Atualizar rede", command=refresh_network,
+        font=("Arial", 10),
     )
+    refresh_network_button.grid(row=0, column=2, padx=10, pady=5)
+    refresh_network()
 
     pair_frame = tk.LabelFrame(
         frame,
@@ -222,7 +270,7 @@ def create_watch_frame(parent: tk.Widget) -> tk.Frame:
 
     pairing_code_label = tk.Label(
         pair_frame,
-        text="Senha:",
+        text="Código de pareamento:",
         font=("Arial", 10),
     )
     pairing_code_label.grid(
