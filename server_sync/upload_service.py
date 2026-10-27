@@ -37,15 +37,16 @@ class UploadService:
         entries: Iterable[ComparisonEntry],
         progress_callback: ProgressCallback = None,
         status_callback: StatusCallback = None,
+        overwrite_conflicts: bool = False,
     ) -> UploadBatchResult:
         selected_entries = tuple(entries)
         results: list[UploadResult] = []
 
         for entry in selected_entries:
-            if entry.status != ComparisonStatus.NEW or entry.local is None:
+            allowed_status = ComparisonStatus.CONFLICT if overwrite_conflicts else ComparisonStatus.NEW
+            if entry.status != allowed_status or entry.local is None or (overwrite_conflicts and entry.remote is None):
                 raise RuntimeError(
-                    "Somente arquivos classificados como novos podem "
-                    f"ser enviados: {entry.key}"
+                    f"Seleção inválida para {'sobrescrita de conflitos' if overwrite_conflicts else 'envio de novos arquivos'}: {entry.key}"
                 )
 
         for index, entry in enumerate(selected_entries, start=1):
@@ -55,6 +56,7 @@ class UploadService:
                 file_count=len(selected_entries),
                 progress_callback=progress_callback,
                 status_callback=status_callback,
+                overwrite_conflicts=overwrite_conflicts,
             )
             results.append(result)
 
@@ -67,6 +69,7 @@ class UploadService:
         file_count: int,
         progress_callback: ProgressCallback,
         status_callback: StatusCallback,
+        overwrite_conflicts: bool = False,
     ) -> UploadResult:
         local = entry.local
 
@@ -128,7 +131,10 @@ class UploadService:
 
             existing_size = self.client.stat_size(final_remote_path)
 
-            if existing_size is not None:
+            if overwrite_conflicts:
+                if entry.remote is None or existing_size != entry.remote.size_bytes:
+                    raise RuntimeError("O destino remoto mudou desde a comparação. Verifique o servidor novamente antes de sobrescrever.")
+            elif existing_size is not None:
                 if existing_size == current_local_size:
                     return UploadResult(
                         key=entry.key,
@@ -155,7 +161,7 @@ class UploadService:
                 base_directory=self.config.remote_raw_root,
             )
 
-            if self.config.verify_sha256:
+            if self.config.verify_sha256 or overwrite_conflicts:
                 set_status(
                     f"Calculando SHA-256 local {file_index}/{file_count}: "
                     f"{entry.key}"
@@ -201,7 +207,7 @@ class UploadService:
                     f"{current_local_size})."
                 )
 
-            if self.config.verify_sha256 and local_sha256 is not None:
+            if (self.config.verify_sha256 or overwrite_conflicts) and local_sha256 is not None:
                 set_status(
                     f"Validando SHA-256 remoto {file_index}/{file_count}: "
                     f"{entry.key}"
@@ -213,6 +219,8 @@ class UploadService:
                         temporary_remote_path
                     )
                 except RemoteHashUnavailable as error:
+                    if overwrite_conflicts:
+                        raise RuntimeError("Não foi possível validar SHA-256. O arquivo original foi preservado e o temporário foi mantido.") from error
                     hash_warning = str(error)
                 else:
                     if remote_sha256 != local_sha256:
@@ -226,17 +234,24 @@ class UploadService:
 
             notify("finalizing")
 
-            if self.client.stat_size(final_remote_path) is not None:
-                raise RuntimeError(
-                    "O destino definitivo passou a existir durante o "
-                    "upload. O arquivo temporário foi mantido e nada foi "
-                    "sobrescrito."
+            if overwrite_conflicts:
+                if self.client.stat_size(final_remote_path) != existing_size:
+                    raise RuntimeError("O destino remoto mudou durante o upload. O temporário foi mantido e nada foi sobrescrito.")
+                self.client.rename_overwrite(
+                    source=temporary_remote_path,
+                    destination=final_remote_path,
                 )
-
-            self.client.rename_no_overwrite(
-                source=temporary_remote_path,
-                destination=final_remote_path,
-            )
+            else:
+                if self.client.stat_size(final_remote_path) is not None:
+                    raise RuntimeError(
+                        "O destino definitivo passou a existir durante o "
+                        "upload. O arquivo temporário foi mantido e nada foi "
+                        "sobrescrito."
+                    )
+                self.client.rename_no_overwrite(
+                    source=temporary_remote_path,
+                    destination=final_remote_path,
+                )
 
             final_size = self.client.stat_size(final_remote_path)
 

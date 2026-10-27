@@ -8,6 +8,7 @@ from .config import ServerSyncConfig
 from .local_inventory import LocalInventoryScanner
 from .models import (
     ComparisonReport,
+    ComparisonStatus,
     UploadBatchResult,
     UploadProgress,
 )
@@ -99,6 +100,7 @@ class ServerSyncBackend:
         selected_keys: Iterable[str],
         progress_callback: ProgressCallback = None,
         status_callback: StatusCallback = None,
+        overwrite_conflicts: bool = False,
     ) -> UploadBatchResult:
         if (
             self._active_config is None
@@ -113,18 +115,20 @@ class ServerSyncBackend:
         selected_key_set = set(selected_keys)
 
         if not selected_key_set:
-            raise RuntimeError("Nenhum arquivo novo foi selecionado.")
+            raise RuntimeError("Nenhum arquivo foi selecionado.")
 
         new_entries_by_key = {
             entry.key: entry
-            for entry in report.new_entries
+            for entry in report.entries_with_status(
+                ComparisonStatus.CONFLICT if overwrite_conflicts else ComparisonStatus.NEW
+            )
         }
         invalid_keys = selected_key_set - set(new_entries_by_key)
 
         if invalid_keys:
             raise RuntimeError(
-                "A seleção contém arquivos que não estão classificados "
-                f"como novos: {', '.join(sorted(invalid_keys))}"
+                "A seleção contém arquivos incompatíveis com esta operação: "
+                f"{', '.join(sorted(invalid_keys))}"
             )
 
         selected_entries = tuple(
@@ -146,6 +150,7 @@ class ServerSyncBackend:
                     entries=selected_entries,
                     progress_callback=progress_callback,
                     status_callback=status_callback,
+                    overwrite_conflicts=overwrite_conflicts,
                 )
         finally:
             self._active_report = None

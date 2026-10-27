@@ -75,7 +75,7 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
         text=(
             "Compara de uma vez todas as fontes configuradas em landing/raw, "
             "incluindo Mobile, Watch, ECG e demais arquivos clínicos. "
-            "Nenhum conflito é sobrescrito e nenhum arquivo é apagado."
+            "Conflitos podem ser sobrescritos pela ação específica na aba Conflitos."
         ),
         font=("Arial", 10),
         wraplength=900,
@@ -226,6 +226,7 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
         pady=4,
     )
 
+    conflict_key_by_item: dict[str, str] = {}
     trees: dict[ComparisonStatus, ttk.Treeview] = {}
     tab_frames: dict[ComparisonStatus, tk.Frame] = {}
 
@@ -316,6 +317,13 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
         tab.grid_rowconfigure(0, weight=1)
         tab.grid_columnconfigure(0, weight=1)
 
+    overwrite_button = tk.Button(
+        tab_frames[ComparisonStatus.CONFLICT],
+        text="Enviar e sobrescrever selecionados",
+        state="disabled",
+    )
+    overwrite_button.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=6)
+
     progress_frame = tk.Frame(frame)
     progress_frame.pack(fill="x", padx=16, pady=(5, 2))
 
@@ -383,6 +391,10 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
                 if selected_keys and report is not None and not busy
                 else "disabled"
             )
+        )
+
+        overwrite_button.config(
+            state="normal" if report is not None and not busy and trees[ComparisonStatus.CONFLICT].selection() else "disabled"
         )
 
     def set_busy(is_busy: bool, indeterminate: bool = False) -> None:
@@ -587,6 +599,7 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
         selected_keys.update(entry.key for entry in report.new_entries)
         new_item_by_key.clear()
         new_key_by_item.clear()
+        conflict_key_by_item.clear()
 
         for status, tree in trees.items():
             tree.delete(*tree.get_children())
@@ -602,6 +615,8 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
                     values=get_entry_values(entry, is_selected),
                 )
 
+                if status == ComparisonStatus.CONFLICT:
+                    conflict_key_by_item[item_id] = entry.key
                 if status == ComparisonStatus.NEW:
                     new_item_by_key[entry.key] = item_id
                     new_key_by_item[item_id] = entry.key
@@ -638,6 +653,7 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
         selected_keys.clear()
         new_item_by_key.clear()
         new_key_by_item.clear()
+        conflict_key_by_item.clear()
 
         for status, tree in trees.items():
             tree.delete(*tree.get_children())
@@ -771,8 +787,12 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
 
         return "\n".join(lines)
 
-    def handle_upload() -> None:
+    def handle_upload(overwrite_conflicts: bool = False) -> None:
         report = report_or_none()
+        keys_to_upload = (
+            tuple(conflict_key_by_item[item] for item in trees[ComparisonStatus.CONFLICT].selection() if item in conflict_key_by_item)
+            if overwrite_conflicts else tuple(sorted(selected_keys))
+        )
 
         if report is None:
             messagebox.showerror(
@@ -782,35 +802,39 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
             )
             return
 
-        if not selected_keys:
+        if not keys_to_upload:
             messagebox.showerror(
                 "Nenhum arquivo selecionado",
-                "Selecione ao menos um arquivo novo.",
+                "Selecione ao menos um arquivo na lista correspondente.",
                 parent=frame,
             )
             return
 
         selected_size = sum(
             entry.local.size_bytes
-            for entry in report.new_entries
-            if entry.key in selected_keys and entry.local is not None
+            for entry in report.entries
+            if entry.key in keys_to_upload and entry.local is not None
+        )
+        overwrite_warning = (
+            "Os arquivos abaixo serão SUBSTITUÍDOS no servidor pelo conteúdo local:\n"
+            + "\n".join(keys_to_upload[:10])
+            + (f"\n... e mais {len(keys_to_upload) - 10} arquivos." if len(keys_to_upload) > 10 else "")
+            if overwrite_conflicts else "Conflitos não serão sobrescritos."
         )
 
         confirmed = messagebox.askyesno(
-            "Confirmar upload",
+            "Confirmar sobrescrita" if overwrite_conflicts else "Confirmar upload",
             "Deseja enviar os arquivos selecionados?\n\n"
             f"Destino: {backend.get_active_connection_summary()}\n"
-            f"Quantidade: {len(selected_keys)}\n"
+            f"Quantidade: {len(keys_to_upload)}\n"
             f"Tamanho total: {format_size(selected_size)}\n\n"
-            "Conflitos não serão sobrescritos e nenhum arquivo "
-            "será apagado.",
+            f"{overwrite_warning}",
             parent=frame,
+            default="no",
         )
 
         if not confirmed:
             return
-
-        keys_to_upload = tuple(sorted(selected_keys))
 
         def task() -> UploadBatchResult:
             return backend.upload_selected(
@@ -818,6 +842,7 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
                 selected_keys=keys_to_upload,
                 progress_callback=update_upload_progress,
                 status_callback=set_status_from_worker,
+                overwrite_conflicts=overwrite_conflicts,
             )
 
         def on_success(result: UploadBatchResult) -> None:
@@ -870,6 +895,8 @@ def create_server_sync_frame(parent: tk.Widget) -> tk.Frame:
     select_all_button.config(command=select_all)
     deselect_all_button.config(command=deselect_all)
     upload_button.config(command=handle_upload)
+    overwrite_button.config(command=lambda: handle_upload(overwrite_conflicts=True))
+    trees[ComparisonStatus.CONFLICT].bind("<<TreeviewSelect>>", lambda _event: update_action_states())
     profile_combobox.bind("<<ComboboxSelected>>", handle_profile_change)
 
     return frame

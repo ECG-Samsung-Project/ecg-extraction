@@ -342,6 +342,14 @@ class SshSftpClient:
 
         sftp.rename(str(source), str(destination))
 
+    def rename_overwrite(
+        self,
+        source: PurePosixPath,
+        destination: PurePosixPath,
+    ) -> None:
+        # OpenSSH POSIX rename replaces the destination atomically.
+        self._require_sftp().posix_rename(str(source), str(destination))
+
     def _require_ssh(self) -> Any:
         if self._ssh is None:
             raise RuntimeError("A conexão SSH não está aberta.")
