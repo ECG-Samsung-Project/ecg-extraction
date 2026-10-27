@@ -4,12 +4,17 @@ import json
 import re
 import shlex
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 
 from core.android_fs import AndroidFileSystem
 
 
 class RegistrationError(RuntimeError):
     """A registration exists but cannot safely identify the current kit."""
+
+
+def is_registration_filename(path: str) -> bool:
+    return "registration" in PurePosixPath(path).stem.casefold()
 
 
 class RegistrationResolver:
@@ -31,21 +36,28 @@ class RegistrationResolver:
         for path in sorted(files):
             if not path.lower().endswith(".json"):
                 continue
+            named_registration = is_registration_filename(path)
             result = self.android_fs.adb.run(
                 ["shell", f"cat -- {shlex.quote(path)}"], check=False,
             )
             if result.returncode != 0:
-                raise RegistrationError(f"Não consegui ler o JSON de identificação: {path}")
+                if named_registration:
+                    raise RegistrationError(f"Não consegui ler o JSON de identificação: {path}")
+                continue
             try:
                 data = json.loads(result.stdout.lstrip("\ufeff"))
             except (ValueError, TypeError) as error:
-                raise RegistrationError(f"JSON ilegível; não é seguro assumir um cadastro antigo: {path}. Corrija ou remova este arquivo da pasta de coleta.") from error
-            if not isinstance(data, dict):
+                if named_registration:
+                    raise RegistrationError(f"JSON de cadastro ilegível: {path}. Corrija o registration antes de extrair.") from error
                 continue
-            if str(data.get("project", "")).strip().upper() != "ECG":
+            if not isinstance(data, dict) or str(data.get("project", "")).strip().upper() != "ECG":
+                if named_registration:
+                    raise RegistrationError(f"Arquivo de cadastro ECG inválido: {path}")
                 continue
             if "participant_id" not in data or "kit_type" not in data:
-                raise RegistrationError(f"Cadastro ECG incompleto: {path}")
+                if named_registration or "participant_id" in data or "kit_type" in data:
+                    raise RegistrationError(f"Cadastro ECG incompleto: {path}")
+                continue
 
             participant_id = str(data["participant_id"]).strip().upper()
             kit_type = str(data["kit_type"]).strip().upper()

@@ -8,6 +8,8 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from core.registration import is_registration_filename
+
 
 def digest(path: Path) -> str:
     with path.open("rb") as stream:
@@ -75,7 +77,9 @@ def save_active_registration(staging: Path, registration: dict) -> None:
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
         except (ValueError, UnicodeError) as error:
-            raise RuntimeError(f"JSON inválido no pacote copiado: {path}") from error
+            if is_registration_filename(path.name):
+                raise RuntimeError(f"JSON de cadastro inválido no pacote copiado: {path}") from error
+            continue
         if isinstance(data, dict) and str(data.get("project", "")).strip().upper() == "ECG" and "participant_id" in data and "kit_type" in data:
             originals.append(path)
     if not any(json.loads(path.read_text(encoding="utf-8-sig")) == registration["document"] for path in originals):
