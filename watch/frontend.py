@@ -23,7 +23,7 @@ def create_watch_frame(parent: tk.Widget) -> tk.Frame:
         text="Extrair dados do relógio",
         font=("Arial", 16, "bold"),
     )
-    title_label.pack(pady=14)
+    title_label.pack(pady=8)
 
     description_label = tk.Label(
         frame,
@@ -32,7 +32,7 @@ def create_watch_frame(parent: tk.Widget) -> tk.Frame:
             "pareamento e conexão (elas são diferentes)."
         ),
         font=("Arial", 10),
-        wraplength=550,
+        wraplength=800,
     )
     description_label.pack(pady=4)
 
@@ -460,6 +460,14 @@ def create_watch_frame(parent: tk.Widget) -> tk.Frame:
                 pairing_code=pairing_code_entry.get(),
             )
 
+
+            connect_port = backend.get_connect_port(
+                ip=watch_ip_entry.get(),)
+            
+            connect_port_entry.delete(0, tk.END)
+
+            connect_port_entry.insert(0, connect_port)
+
             set_status("Pareamento concluído.")
 
             messagebox.showinfo(
@@ -536,6 +544,9 @@ def create_watch_frame(parent: tk.Widget) -> tk.Frame:
             set_status(
                 "Todos os devices foram desconectados."
             )
+
+            pairing_code_entry.delete(0, tk.END)
+            connect_port_entry.delete(0, tk.END)
 
             messagebox.showinfo(
                 "Desconectar",

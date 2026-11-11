@@ -110,6 +110,11 @@ class WatchBackend:
             pairing_code=pairing_code,
         )
 
+    def get_connect_port(self, ip: str) -> str:
+        return self.connection_manager.get_connect_port(
+            ip=ip,
+        )
+
     def connect_watch(
         self,
         ip: str,

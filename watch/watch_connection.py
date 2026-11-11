@@ -2,6 +2,7 @@ import ipaddress
 import json
 import subprocess
 import sys
+import re
 
 from core.adb_client import AdbClient
 
@@ -60,7 +61,7 @@ class WatchConnectionManager:
         except ipaddress.AddressValueError as error:
             raise RuntimeError(
                 "Informe o IPv4 completo mostrado no relógio, com os quatro números "
-                "entre 0 e 255. Exemplo: 192.168.15.218."
+                "entre 0 e 255. Exemplo: 30.0.0.218"
             ) from error
 
         if address.is_unspecified or address.is_loopback or address.is_multicast or int(address) == 0xFFFFFFFF:
@@ -187,7 +188,33 @@ class WatchConnectionManager:
             input_text=f"{pairing_code}\n",
         )
 
+
         return result.stdout
+
+    def get_connect_port(
+        self,
+        ip: str,
+    ) -> str:
+        mdns_result = self.adb.run(["mdns", "services"])
+
+        connect_port = None
+
+        for line in mdns_result.stdout.splitlines():
+            if "_adb-tls-connect" in line and ip in line:
+                match = re.search(rf"{re.escape(ip)}:(\d+)", line)
+                if match:
+                    connect_port = match.group(1)
+                    break
+
+        if not connect_port:
+            raise RuntimeError(
+                "Não consegui descobrir a porta de conexão do relógio.\n\n"
+                "Confira se o relógio está ligado, na mesma rede local, e com a depuração USB/Wi-Fi ativada."
+            )
+
+        return connect_port
+
+
 
     def connect_watch(
         self,
