@@ -19,6 +19,46 @@ participantes fica em
 e não fazem parte deste repositório.
 
 
+## Login na aplicação
+
+Ao abrir o programa, informe seu usuário e senha da API ECG. Um login
+bem-sucedido libera Watch, Mobile e Enviar ao Servidor. Usuário e senha são
+enviados exatamente como digitados, incluindo espaços e caracteres especiais.
+
+Como alternativa explícita, **Continuar sem login (modo offline)** solicita
+o nome do operador e libera apenas Watch e Mobile. A aba Enviar ao Servidor
+fica desabilitada. O nome identifica a sessão na tela; não é uma identidade
+validada pela API nem é acrescentado aos metadados das extrações nesta versão.
+O modo offline não cria tokens, não realiza chamadas autenticadas à API e
+não é ativado automaticamente quando o login falha. Os dados extraídos continuam
+nos destinos locais existentes; não há fila nova de sincronização automática.
+Para entrar com login depois, feche e reabra o aplicativo.
+
+O endereço padrão é `https://ecg.uea.edu.br`. Para alterá-lo, configure
+`ECG_API_BASE_URL` no `.env` da raiz (somente HTTPS). Variáveis já definidas no
+ambiente têm prioridade. O login envia JSON com `username` e `password` para
+`POST /api/v1/auth/login`.
+
+As requisições usam um User-Agent próprio (`ECGExtraction/1.0`) e os cabeçalhos
+`Accept: */*` e `Content-Type: application/json`. Erros HTTP mostram o código e,
+quando disponível, o detalhe JSON do servidor, com os valores enviados removidos.
+
+Os tokens ficam somente em memória. Não há login persistente, renovação
+automática de token ou restrição de abas por perfil nesta versão. A autenticação
+SSH/SFTP do upload continua independente do login da aplicação.
+
+Para futuras integrações, o cliente compartilhado `api.ApiClient` oferece
+`request_json(method, path, payload=...)`, com autenticação Bearer. Os caminhos
+devem ser relativos à API, começando com `/`, sem query ou fragmento. Uma resposta
+401 limpa a sessão e gera `AuthenticationError`; a funcionalidade que consumir
+a API deve tratar a necessidade de autenticar novamente.
+
+Testes automatizados (sem credenciais reais ou chamadas ao servidor):
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
 ## Envio ao servidor
 
 A aba **Enviar ao Servidor** compara e envia arquivos destas pastas em
