@@ -162,10 +162,24 @@ class WatchBackend:
         self,
         source_paths: list[str],
         watch_id_prompt: WatchIdPrompt = None,
+        *,
+        expected_participant_id: str | None = None,
     ) -> tuple[str, dict]:
+        expected = (self.validate_manual_watch_id(expected_participant_id)
+                    if expected_participant_id is not None else None)
+
+        def check_identity(ids: list[str]) -> None:
+            if expected and any(value != expected for value in ids):
+                raise RuntimeError(
+                    f"Conflito de participante. Informado: {expected}. "
+                    f"Encontrado no relógio: {', '.join(ids)}. "
+                    "Corrija a identificação antes de extrair."
+                )
+
         registration = RegistrationResolver(self.android_fs).resolve(source_paths)
         if registration:
             participant_id = registration["participant_id"]
+            check_identity([participant_id])
             return participant_id, {
                 "id_type": "participant_id",
                 "id_pattern": "ABC-12-3456",
@@ -224,6 +238,7 @@ class WatchBackend:
                 resolver_errors.append(f"{source_path}: {exc}")
 
         if ids_found:
+            check_identity(ids_found)
             selected_id = ids_found[0]
 
             return selected_id, {
@@ -261,6 +276,9 @@ class WatchBackend:
 
         prompt_reason = "\n".join(error_lines)
 
+        if expected:
+            watch_id_prompt = lambda _reason, _suggested: expected
+
         if watch_id_prompt is None:
             raise RuntimeError(
                 f"{prompt_reason}\n\n"
@@ -293,7 +311,7 @@ class WatchBackend:
             "selected_id": selected_id,
             "has_valid_id": True,
             "automatic_id_found": False,
-            "resolution_source": "manual_input",
+            "resolution_source": "form_input" if expected else "manual_input",
             "manual_id": selected_id,
             "has_multiple_valid_ids": False,
             "multiple_valid_ids_count": 0,
@@ -369,6 +387,8 @@ class WatchBackend:
         connect_port: str,
         status_callback: StatusCallback = None,
         watch_id_prompt: WatchIdPrompt = None,
+        *,
+        expected_participant_id: str | None = None,
     ) -> dict:
         def set_status(text: str) -> None:
             if status_callback:
@@ -412,6 +432,7 @@ class WatchBackend:
         selected_id, id_metadata = self.resolve_watch_id_from_sources(
             source_paths=source_paths,
             watch_id_prompt=watch_id_prompt,
+            expected_participant_id=expected_participant_id,
         )
 
         set_status("Varredura concluída.")
@@ -438,12 +459,16 @@ class WatchBackend:
         collection_context: str,
         status_callback: StatusCallback = None,
         watch_id_prompt: WatchIdPrompt = None,
+        *,
+        expected_participant_id: str | None = None,
+        watch_name: str | None = None,
     ) -> dict:
         def set_status(text: str) -> None:
             if status_callback:
                 status_callback(text)
 
-        watch_name = self.format_watch_name(watch_number)
+        watch_name = (self.format_watch_name(watch_number) if watch_name is None
+                      else watch_name.strip() or "Não informado")
         timestamp = self.get_current_timestamp()
 
         connect_address = self.get_connect_address(
@@ -484,15 +509,20 @@ class WatchBackend:
         selected_id, id_metadata = self.resolve_watch_id_from_sources(
             source_paths=source_paths,
             watch_id_prompt=watch_id_prompt,
+            expected_participant_id=expected_participant_id,
         )
 
-        if id_metadata.get("resolution_source") == "manual_input":
+        if id_metadata.get("resolution_source") in {"manual_input", "form_input"}:
             set_status(f"ID informado manualmente: {selected_id}")
         else:
             set_status(f"ID encontrado: {selected_id}")
 
         registration = id_metadata.get("registration")
+        context_warning = None
         if registration:
+            if collection_context and collection_context != registration["collection_context"]:
+                context_warning = "Type informado difere do cadastro ECG; destino definido pelo cadastro ECG."
+                set_status(context_warning)
             collection_context = registration["collection_context"]
             set_status(f"Cadastro ECG: {selected_id} / {registration['kit_type']}")
         elif not collection_context:
@@ -573,4 +603,5 @@ class WatchBackend:
             "output_root": output_root,
             "output_archive": archive_path,
             "metadata_file": "metadata.json",
+            "context_warning": context_warning,
         }

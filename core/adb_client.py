@@ -24,6 +24,7 @@ class AdbClient:
         commands_without_device = {
             "version",
             "devices",
+            "mdns",
             "pair",
             "connect",
             "disconnect",

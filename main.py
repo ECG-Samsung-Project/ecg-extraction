@@ -48,7 +48,7 @@ def run_app() -> None:
         notebook = ttk.Notebook(root)
         notebook.pack(fill="both", expand=True)
 
-        watch_frame = create_watch_frame(notebook)
+        watch_frame = create_watch_frame(notebook, api_client=client)
         mobile_frame = create_mobile_frame(notebook)
 
         notebook.add(watch_frame, text="Watch")

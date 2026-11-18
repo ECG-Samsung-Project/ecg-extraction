@@ -53,7 +53,8 @@ class NavigationTests(unittest.TestCase):
                 callback(client.session)
                 callback(client.session)
                 notebook_factory.assert_called_once()
-                for factory in (watch, mobile, sync):
+                watch.assert_called_once_with(notebook_factory.return_value, api_client=client)
+                for factory in (mobile, sync):
                     factory.assert_called_once_with(notebook_factory.return_value)
                 login_factory.return_value.destroy.assert_called_once()
                 self.assertEqual(notebook_factory.return_value.add.call_count, 3)

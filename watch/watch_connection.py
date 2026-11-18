@@ -150,6 +150,18 @@ class WatchConnectionManager:
 
         return devices
 
+    def list_device_statuses(self) -> list[dict[str, str]]:
+        """Return all transports without treating unauthorized/offline as errors."""
+        result = self.adb.run(["devices", "-l"])
+        devices = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2 or line.startswith(("List of devices", "*")):
+                continue
+            devices.append({"device_id": parts[0], "state": parts[1],
+                            "details": " ".join(parts[2:])})
+        return devices
+
     def get_target_device_id(
         self,
         devices: list[str],
