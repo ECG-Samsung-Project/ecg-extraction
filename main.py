@@ -12,7 +12,42 @@ from server_sync.frontend import create_server_sync_frame
 
 
 def run_app() -> None:
-    root = tk.Tk()
+    root = None
+    heartbeat = None
+    try:
+        root = tk.Tk()
+        report_error = root.report_callback_exception
+
+        def report_callback_exception(exc_type, value, traceback):
+            # Tk catches exceptions raised inside callbacks, including Ctrl+C.
+            if issubclass(exc_type, KeyboardInterrupt):
+                root.quit()
+            else:
+                report_error(exc_type, value, traceback)
+
+        def poll_interrupts():
+            nonlocal heartbeat
+            # Periodically return to Python so SIGINT is handled while Tk is idle.
+            heartbeat = root.after(100, poll_interrupts)
+
+        root.report_callback_exception = report_callback_exception
+        poll_interrupts()
+        _run_application(root)
+    except KeyboardInterrupt:
+        # A user-requested interruption is a normal application exit.
+        pass
+    finally:
+        if root is not None:
+            try:
+                if heartbeat is not None:
+                    root.after_cancel(heartbeat)
+                root.destroy()
+            except tk.TclError:
+                # The window may already have been destroyed by its close button.
+                pass
+
+
+def _run_application(root: tk.Tk) -> None:
     root.title("Extração")
 
     root.state("zoomed")

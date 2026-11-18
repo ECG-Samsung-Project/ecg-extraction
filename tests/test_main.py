@@ -63,5 +63,51 @@ class NavigationTests(unittest.TestCase):
             main.run_app()
 
 
+class InterruptionTests(unittest.TestCase):
+    @patch.object(main, "_run_application", side_effect=KeyboardInterrupt)
+    @patch.object(main.tk, "Tk")
+    def test_interrupt_closes_window_without_propagating(self, root_factory, run):
+        main.run_app()
+        root_factory.return_value.destroy.assert_called_once()
+        root_factory.return_value.after_cancel.assert_called_once()
+
+    @patch.object(main.tk, "Tk")
+    def test_callback_interrupt_quits_without_error_report(self, root_factory):
+        root = root_factory.return_value
+        original_report = root.report_callback_exception
+        def callback(_root):
+            root.report_callback_exception(KeyboardInterrupt, KeyboardInterrupt(), None)
+        with patch.object(main, "_run_application", side_effect=callback):
+            main.run_app()
+        root.quit.assert_called_once()
+        root.destroy.assert_called_once()
+        original_report.assert_not_called()
+
+    @patch.object(main.tk, "Tk")
+    def test_other_callback_errors_are_still_reported(self, root_factory):
+        root = root_factory.return_value
+        original_report = root.report_callback_exception
+        error = RuntimeError("real failure")
+        def callback(_root):
+            root.report_callback_exception(RuntimeError, error, None)
+        with patch.object(main, "_run_application", side_effect=callback):
+            main.run_app()
+        original_report.assert_called_once_with(RuntimeError, error, None)
+        root.quit.assert_not_called()
+
+    @patch.object(main, "_run_application", side_effect=RuntimeError("real failure"))
+    @patch.object(main.tk, "Tk")
+    def test_other_application_errors_are_not_swallowed(self, root_factory, run):
+        with self.assertRaisesRegex(RuntimeError, "real failure"):
+            main.run_app()
+        root_factory.return_value.destroy.assert_called_once()
+
+    @patch.object(main, "_run_application")
+    @patch.object(main.tk, "Tk")
+    def test_already_destroyed_window_is_a_normal_exit(self, root_factory, run):
+        root_factory.return_value.destroy.side_effect = main.tk.TclError("already destroyed")
+        main.run_app()
+
+
 if __name__ == "__main__":
     unittest.main()

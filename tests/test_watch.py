@@ -161,7 +161,9 @@ class WatchUiTests(unittest.TestCase):
                           (view.verify_button, view.network_button, view.pair_button, view.connect_button)}, {12})
         self.assertEqual(view.inspect_button.master, view.extract_button.master)
         self.assertEqual(view.inspect_button.grid_info()["row"], view.extract_button.grid_info()["row"])
-        self.assertGreater(view.kit_status_label.grid_info()["row"], view.watch_entry.grid_info()["row"])
+        watch_entry = next(widget for widget in view.inputs
+                           if getattr(widget, "variable", None) is view.vars["watch"])
+        self.assertGreater(view.kit_status_label.grid_info()["row"], watch_entry.grid_info()["row"])
         self.root.update_idletasks()
         # Allow room for the outer vertical scrollbar at the 900px minimum.
         self.assertLessEqual(view.frame.winfo_reqwidth(), 880)
