@@ -5,6 +5,7 @@ from tkinter import messagebox, ttk
 
 from api import ApiClient, AuthSession, OfflineSession
 from auth.frontend import create_login_frame
+from core.identification import IdentificationContext
 
 from watch.frontend import create_watch_frame
 from mobile.frontend import create_mobile_frame
@@ -83,8 +84,9 @@ def _run_application(root: tk.Tk) -> None:
         notebook = ttk.Notebook(root)
         notebook.pack(fill="both", expand=True)
 
-        watch_frame = create_watch_frame(notebook, api_client=client)
-        mobile_frame = create_mobile_frame(notebook)
+        identification = IdentificationContext(root)
+        watch_frame = create_watch_frame(notebook, api_client=client, identification=identification)
+        mobile_frame = create_mobile_frame(notebook, api_client=client, identification=identification)
 
         notebook.add(watch_frame, text="Watch")
         notebook.add(mobile_frame, text="Mobile")

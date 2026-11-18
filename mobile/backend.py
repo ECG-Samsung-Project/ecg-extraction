@@ -153,6 +153,35 @@ class MobileBackend:
     def resolve_participant(
         self,
         participant_id_prompt: ParticipantIdPrompt = None,
+        *,
+        expected_participant_id: str | None = None,
+    ) -> dict:
+        """Validate form identification without changing legacy resolution callers."""
+        expected = (self._validate_manual_participant_id(expected_participant_id)
+                    if expected_participant_id is not None else None)
+        prompt = participant_id_prompt
+        if expected:
+            prompt = lambda _reason, _suggested: expected
+        result = self._resolve_participant(participant_id_prompt=prompt)
+        if expected:
+            found = [result["participant_id"]]
+            if not result.get("registration") and result.get("has_multiple_valid_ids"):
+                # Raw ring identifiers need CSV resolution before comparing them.
+                for raw_id in result["raw_ids"]:
+                    found.append(self.participant_lookup.resolve(raw_id)["participant_id"])
+            if any(value.strip().upper() != expected.upper() for value in found):
+                raise RuntimeError(
+                    f"Conflito de participante. Informado: {expected}. "
+                    f"Encontrado no celular: {', '.join(dict.fromkeys(found))}. "
+                    "Corrija a identificação antes de extrair."
+                )
+            if result["lookup_source"] == "manual_input":
+                result["lookup_source"] = "form_input"
+        return result
+
+    def _resolve_participant(
+        self,
+        participant_id_prompt: ParticipantIdPrompt = None,
     ) -> dict:
         try:
             return self.participant_resolver.resolve_from_phone()
@@ -210,6 +239,8 @@ class MobileBackend:
         self,
         status_callback: StatusCallback = None,
         participant_id_prompt: ParticipantIdPrompt = None,
+        *,
+        expected_participant_id: str | None = None,
     ) -> dict:
         def set_status(text: str) -> None:
             if status_callback:
@@ -217,6 +248,7 @@ class MobileBackend:
 
         set_status("Verificando celular conectado...")
         device_id = self.check_device_connected()
+        self.adb.target_device_id = device_id
 
         set_status(f"Celular encontrado: {device_id}")
 
@@ -245,12 +277,14 @@ class MobileBackend:
         participant_lookup_source = None
         participant_matched_in_csv = None
         participant_id_error = None
+        participant_resolution = {}
 
         set_status("Buscando ID do participante...")
 
         try:
             participant_resolution = self.resolve_participant(
                 participant_id_prompt=participant_id_prompt,
+                expected_participant_id=expected_participant_id,
             )
 
             participant_id = participant_resolution["participant_id"]
@@ -259,6 +293,8 @@ class MobileBackend:
             participant_matched_in_csv = participant_resolution["matched_in_csv"]
 
         except RuntimeError as error:
+            if expected_participant_id is not None:
+                raise
             participant_id_error = str(error)
 
         set_status("Verificação concluída.")
@@ -274,6 +310,7 @@ class MobileBackend:
             "participant_lookup_source": participant_lookup_source,
             "participant_matched_in_csv": participant_matched_in_csv,
             "participant_id_error": participant_id_error,
+            "registration": participant_resolution.get("registration"),
         }
 
     def extract_documents(
@@ -282,16 +319,21 @@ class MobileBackend:
         collection_context: str,
         status_callback: StatusCallback = None,
         participant_id_prompt: ParticipantIdPrompt = None,
+        *,
+        expected_participant_id: str | None = None,
+        mobile_name: str | None = None,
     ) -> dict:
         def set_status(text: str) -> None:
             if status_callback:
                 status_callback(text)
 
-        mobile_name = self.format_mobile_name(mobile_number)
+        mobile_name = (self.format_mobile_name(mobile_number) if mobile_name is None
+                       else mobile_name.strip() or "Não informado")
         timestamp = self.get_current_timestamp()
 
         set_status("Verificando celular conectado...")
         device_id = self.check_device_connected()
+        self.adb.target_device_id = device_id
 
         set_status(f"Celular encontrado: {device_id}")
 
@@ -299,13 +341,18 @@ class MobileBackend:
         set_status("Buscando ID do participante automaticamente...")
         participant_resolution = self.resolve_participant(
             participant_id_prompt=participant_id_prompt,
+            expected_participant_id=expected_participant_id,
         )
 
         participant_id = participant_resolution["participant_id"]
         selected_raw_id = participant_resolution["selected_raw_id"]
 
         registration = participant_resolution.get("registration")
+        context_warning = None
         if registration:
+            if collection_context and collection_context != registration["collection_context"]:
+                context_warning = "Type informado difere do cadastro ECG; destino definido pelo cadastro ECG."
+                set_status(context_warning)
             collection_context = registration["collection_context"]
             set_status(f"Cadastro ECG: {participant_id} / {registration['kit_type']}")
         elif not collection_context:
@@ -314,7 +361,7 @@ class MobileBackend:
         collection_metadata = self.config.get_collection_context_metadata(collection_context)
         output_root = self.config.get_output_root(collection_context)
 
-        if participant_resolution["lookup_source"] == "manual_input":
+        if participant_resolution["lookup_source"] in {"manual_input", "form_input"}:
             set_status(f"ID informado manualmente: {participant_id}")
         elif selected_raw_id != participant_id:
             set_status(f"ID encontrado: {selected_raw_id} -> {participant_id}")
@@ -395,4 +442,22 @@ class MobileBackend:
             "output_root": output_root,
             "output_archive": archive_path,
             "metadata_file": "metadata.json",
+            "registration": registration,
+            "context_warning": context_warning,
         }
+
+    def list_device_statuses(self) -> list[dict[str, str]]:
+        """List all ADB states without changing the existing single-device policy."""
+        result = self.adb.run(["devices", "-l"])
+        devices = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and not line.startswith(("List of devices", "*")):
+                devices.append({"device_id": parts[0], "state": parts[1],
+                                "details": " ".join(parts[2:])})
+        return devices
+
+    def disconnect_all_devices(self) -> str:
+        result = self.adb.run(["disconnect"])
+        self.adb.target_device_id = None
+        return result.stdout

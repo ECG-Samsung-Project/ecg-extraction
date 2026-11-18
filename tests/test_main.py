@@ -5,6 +5,11 @@ import main
 
 
 class NavigationTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(main, "IdentificationContext")
+        self.context = patcher.start().return_value
+        self.addCleanup(patcher.stop)
+
     def test_offline_opens_local_tabs_without_constructing_upload(self):
         with (patch.object(main.tk, "Tk") as root_factory,
               patch.object(main, "ApiClient") as client_factory,
@@ -53,9 +58,10 @@ class NavigationTests(unittest.TestCase):
                 callback(client.session)
                 callback(client.session)
                 notebook_factory.assert_called_once()
-                watch.assert_called_once_with(notebook_factory.return_value, api_client=client)
-                for factory in (mobile, sync):
-                    factory.assert_called_once_with(notebook_factory.return_value)
+                for factory in (watch, mobile):
+                    factory.assert_called_once_with(notebook_factory.return_value, api_client=client,
+                                                    identification=self.context)
+                sync.assert_called_once_with(notebook_factory.return_value)
                 login_factory.return_value.destroy.assert_called_once()
                 self.assertEqual(notebook_factory.return_value.add.call_count, 3)
 

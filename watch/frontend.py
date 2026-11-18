@@ -6,6 +6,8 @@ from tkinter import simpledialog, ttk
 
 from api import ApiClient
 from core.scrollable_frame import create_scrollable_frame
+from core.ui_widgets import PlaceholderEntry
+from core.identification import IdentificationContext
 from .backend import WatchBackend
 from .kit_lookup import check_kit
 from .watch_id import WatchIdParser
@@ -19,46 +21,11 @@ PLACEHOLDERS = {
 }
 
 
-class PlaceholderEntry(ttk.Entry):
-    """Paint a hint without putting it in the entry's value or clipboard."""
-    def __init__(self, parent, *, textvariable, placeholder, **kwargs):
-        super().__init__(parent, textvariable=textvariable, **kwargs)
-        self.variable = textvariable
-        self.focused = False
-        background = ttk.Style(self).lookup("TEntry", "fieldbackground") or "white"
-        self.hint = tk.Label(self, text=placeholder, foreground="#757575", background=background,
-                             font="TkTextFont", borderwidth=0, padx=0, pady=0, cursor="xterm")
-        self.hint.bind("<Button-1>", self.focus_entry)
-        self.bind("<FocusIn>", lambda _event: self.set_focused(True), add="+")
-        self.bind("<FocusOut>", lambda _event: self.set_focused(False), add="+")
-        self.trace = self.variable.trace_add("write", self.update_hint)
-        self.bind("<Destroy>", self.remove_trace, add="+")
-        self.update_hint()
-
-    def focus_entry(self, _event):
-        if not self.instate(["disabled"]):
-            self.focus_set()
-            self.set_focused(True)
-
-    def set_focused(self, focused):
-        self.focused = focused
-        self.update_hint()
-
-    def update_hint(self, *_args):
-        if not self.variable.get() and not self.focused:
-            self.hint.place(x=4, rely=0.5, anchor="w")
-        else:
-            self.hint.place_forget()
-
-    def remove_trace(self, event):
-        if event.widget is self:
-            self.variable.trace_remove("write", self.trace)
-
-
 class WatchView:
-    def __init__(self, parent, api_client=None, backend=None):
+    def __init__(self, parent, api_client=None, backend=None, identification=None):
         self.backend = backend if backend is not None else WatchBackend()
         self.client = api_client
+        self.identification = identification or IdentificationContext(parent)
         self.outer, self.frame = create_scrollable_frame(parent)
         self.events = queue.Queue()
         self.closed = threading.Event()
@@ -73,14 +40,21 @@ class WatchView:
         self.registration_context = ""
         self.vars = {name: tk.StringVar(self.frame) for name in
                      ("kit", "participant", "watch", "context", "ip", "pair_port", "code", "connect_port")}
+        self.vars.update(self.identification.values)
         for name in ("status", "kit_status", "participant_status", "network_status", "pair_status",
                      "connection_status", "device_status", "destination"):
             setattr(self, name, tk.StringVar(self.frame))
+        self.kit_status = self.identification.kit_status
+        self.participant_status = self.identification.participant_status
         self.status.set("Aguardando...")
+        self.progress_running = False
         self.inputs = []
+        self.traces = []
         self.build()
         for name, variable in self.vars.items():
-            variable.trace_add("write", lambda *_args, key=name: self.changed(key))
+            self.traces.append((variable, variable.trace_add("write", lambda *_args, key=name: self.changed(key))))
+        self.context_traces = [(variable, variable.trace_add("write", lambda *_: self.update_controls()))
+                               for variable in (self.identification.busy, self.identification.lookup_busy)]
         self.outer.bind("<Destroy>", self.destroyed, add="+")
         self.timer = self.frame.after(50, self.poll)
         self.update_controls()
@@ -140,7 +114,7 @@ class WatchView:
         self.participant_status_label = self.label(ident, self.participant_status, 5, 3)
         self.label(ident, self.destination, 6, 3)
         for variable in (self.kit_status, self.participant_status):
-            variable.trace_add("write", self.update_status_styles)
+            self.traces.append((variable, variable.trace_add("write", self.update_status_styles)))
         pair = ttk.LabelFrame(left, text="Pareamento", padding=5)
         pair.grid(row=1, column=0, sticky="ew", pady=4)
         pair.columnconfigure(0, weight=1)
@@ -206,6 +180,8 @@ class WatchView:
         scroll.grid(row=0, column=1, sticky="ns")
         self.results.configure(yscrollcommand=scroll.set)
         self.label(right, self.status, 4)
+        self.progress_bar = ttk.Progressbar(right, mode="indeterminate")
+        self.progress_bar.grid(row=5, column=0, sticky="ew", pady=4)
 
     def values(self):
         return {key: variable.get().strip() for key, variable in self.vars.items()}
@@ -237,6 +213,15 @@ class WatchView:
         self.update_controls()
 
     def update_controls(self):
+        if self.closed.is_set():
+            return
+        active = self.busy or self.lookup_busy or self.network_busy
+        if active != self.progress_running:
+            self.progress_running = active
+            if active:
+                self.progress_bar.start(10)
+            else:
+                self.progress_bar.stop()
         values = self.values()
         manager = self.backend.connection_manager
         try:
@@ -252,7 +237,7 @@ class WatchView:
                 return False
         address = f"{values['ip']}:{values['connect_port']}"
         connected = self.devices_current and any(d["device_id"] == address and d["state"] == "device" for d in self.devices)
-        ready = not self.busy and not self.lookup_busy
+        ready = not self.busy and not self.identification.busy.get() and not self.identification.lookup_busy.get()
         eligibility = {
             self.verify_button: ready and self.online() and bool(values["kit"]) and not self.lookup_busy,
             self.network_button: ready and not self.network_busy,
@@ -266,7 +251,7 @@ class WatchView:
         for button, enabled in eligibility.items():
             button.configure(state="normal" if enabled else "disabled")
         for widget in self.inputs:
-            widget.configure(state="disabled" if self.busy else "normal")
+            widget.configure(state="disabled" if self.identification.busy.get() else "normal")
         if not self.online():
             offline = self.client is None or self.client.offline_session is not None
             self.kit_status.set("Modo offline — identificação manual" if offline else "Sessão expirada — identificação manual; reabra para entrar.")
@@ -303,6 +288,8 @@ class WatchView:
     def destroyed(self, event):
         if event.widget is self.outer:
             self.closed.set()
+            for variable, trace in self.context_traces + self.traces:
+                variable.trace_remove("write", trace)
             if self.timer:
                 self.outer.after_cancel(self.timer)
 
@@ -324,12 +311,14 @@ class WatchView:
         return answer[0]
 
     def run_adb(self, work, success, feedback=None, refresh=True):
-        if self.busy:
+        if self.busy or self.identification.busy.get() or self.identification.lookup_busy.get():
             return
         self.busy = True
+        self.identification.busy.set(True)
         self.update_controls()
         def finish():
             self.busy = False
+            self.identification.busy.set(False)
             if refresh:
                 self.refresh_devices()
             self.update_controls()
@@ -348,15 +337,18 @@ class WatchView:
         self.submit(work, completed, failed)
 
     def verify_kit(self):
-        if self.lookup_busy or self.busy or not self.online() or not self.vars["kit"].get().strip():
+        if (self.identification.lookup_busy.get() or self.identification.busy.get()
+                or not self.online() or not self.vars["kit"].get().strip()):
             return
         kit, generation, before = self.vars["kit"].get().strip(), self.lookup_generation, self.values()
         self.lookup_busy = True
+        self.identification.lookup_busy.set(True)
         self.kit_status.set("Verificando Kit...")
         self.participant_status.set("")
         self.update_controls()
         def finished(result):
             self.lookup_busy = False
+            self.identification.lookup_busy.set(False)
             if generation == self.lookup_generation:
                 self.kit_status.set("Kit encontrado" if result["exists"] else "Kit não cadastrado")
                 self.participant_status.set("Participante encontrado" if result["participant"] else "Nenhum participante associado")
@@ -370,6 +362,7 @@ class WatchView:
             self.update_controls()
         def failed(message):
             self.lookup_busy = False
+            self.identification.lookup_busy.set(False)
             if generation == self.lookup_generation:
                 self.kit_status.set(message + " Identificação manual disponível.")
             self.update_controls()
@@ -522,5 +515,6 @@ class WatchView:
         self.run_adb(work, complete)
 
 
-def create_watch_frame(parent: tk.Widget, api_client: ApiClient | None = None) -> tk.Frame:
-    return WatchView(parent, api_client).outer
+def create_watch_frame(parent: tk.Widget, api_client: ApiClient | None = None,
+                       identification: IdentificationContext | None = None) -> tk.Frame:
+    return WatchView(parent, api_client, identification=identification).outer
